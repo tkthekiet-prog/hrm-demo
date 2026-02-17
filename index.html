@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>HRM Demo (No Install)</title>
+  <style>
+    :root { color-scheme: light; }
+    body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #fafafa; color: #111; }
+    a { color: inherit; text-decoration: none; }
+    .container { max-width: 1100px; margin: 0 auto; padding: 20px; }
+    .card { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
+    .btn { border: 1px solid #111; background: #111; color: white; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
+    .btn.secondary { background: white; color: #111; }
+    .input, select { border: 1px solid #e5e7eb; padding: 10px 12px; border-radius: 10px; width: 100%; }
+    .label { font-size: 12px; color: #374151; margin: 8px 0 6px; }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th, .table td { text-align: left; border-bottom: 1px solid #eee; padding: 10px 8px; font-size: 14px; }
+    .badge { display: inline-block; padding: 2px 8px; border: 1px solid #e5e7eb; border-radius: 999px; font-size: 12px; }
+    .warn { border-color: #f59e0b; }
+    .danger { border-color: #ef4444; }
+    .nav { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+    .nav a, .nav button { padding: 8px 10px; border-radius: 10px; border: 1px solid #e5e7eb; background: white; }
+    .nav button { cursor: pointer; }
+    h2,h3 { margin: 0 0 8px 0; }
+    p { margin: 6px 0; }
+    .muted { color: #6b7280; }
+    .spacer { height: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
+    .link { text-decoration: underline; text-underline-offset: 3px; }
+    .small { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="container" id="app"></div>
+
+  <script>
+  // ===== Demo store (localStorage) =====
+  const KEYS = {
+    projects: "hrm_demo_projects_v1",
+    personnel: "hrm_demo_personnel_v1",
+    credentials: "hrm_demo_credentials_v1",
+  };
+
+  const uuid = () => (crypto.randomUUID ? crypto.randomUUID() :
+    "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+      const r = (Math.random()*16)|0, v = c==="x"?r:(r&0x3)|0x8; return v.toString(16);
+    })
+  );
+
+  const load = (key, fallback) => {
+    try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+    catch { return fallback; }
+  };
+  const save = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+
+  function addDays(n) {
+    const d = new Date();
+    d.setDate(d.getDate() + n);
+    const y = d.getFullYear();
+    const m = String(d.getMonth()+1).padStart(2,"0");
+    const da = String(d.getDate()).padStart(2,"0");
+    return `${y}-${m}-${da}`;
+  }
+
+  function ensureSeed() {
+    const projects = load(KEYS.projects, []);
+    if (projects.length) return;
+
+    const p1 = { id: uuid(), code: "RUYA1", name: "RUYA1 - Demo Project" };
+    const p2 = { id: uuid(), code: "LDV",  name: "LDV - Demo Project" };
+
+    const personnel = [
+      { id: uuid(), project_id: p1.id, full_name: "Tran Van Hieu", passport_no: "B1234567", position: "Rigger", status: "active" },
+      { id: uuid(), project_id: p1.id, full_name: "Thai Binh Minh", passport_no: "C7654321", position: "Supervisor", status: "active" },
+      { id: uuid(), project_id: p2.id, full_name: "Nguyen Van Phuc", passport_no: "A9988776", position: "Technician", status: "active" },
+    ];
+
+    const credentials = [
+      { id: uuid(), project_id: p1.id, personnel_id: personnel[0].id, kind: "qe_pass", issue_date: addDays(0),  expiry_date: addDays(7),  notes: "Demo QE pass" },
+      { id: uuid(), project_id: p1.id, personnel_id: personnel[1].id, kind: "visa",    issue_date: addDays(0),  expiry_date: addDays(14), notes: "Demo visa" },
+      { id: uuid(), project_id: p2.id, personnel_id: personnel[2].id, kind: "medical", issue_date: addDays(0),  expiry_date: addDays(30), notes: "Demo medical" },
+    ];
+
+    save(KEYS.projects, [p1, p2]);
+    save(KEYS.personnel, personnel);
+    save(KEYS.credentials, credentials);
+  }
+
+  function resetData() {
+    localStorage.removeItem(KEYS.projects);
+    localStorage.removeItem(KEYS.personnel);
+    localStorage.removeItem(KEYS.credentials);
+    ensureSeed();
+    navigate("#/dashboard");
+  }
+
+  function getProjects() { ensureSeed(); return load(KEYS.projects, []); }
+  function addProject({code, name}) {
+    const list = getProjects();
+    const p = { id: uuid(), code: (code||"").trim() || null, name: name.trim() };
+    save(KEYS.projects, [p, ...list]); return p;
+  }
+
+  function getPersonnel(projectId) {
+    ensureSeed();
+    return load(KEYS.personnel, []).filter(x => x.project_id === projectId).sort((a,b)=>a.full_name.localeCompare(b.full_name));
+  }
+  function addPersonnel(p) {
+    const all = load(KEYS.personnel, []);
+    const row = { ...p, id: uuid() };
+    save(KEYS.personnel, [row, ...all]); return row;
+  }
+  function getPersonnelById(projectId, personnelId) {
+    return getPersonnel(projectId).find(x => x.id === personnelId) || null;
+  }
+
+  function getCredentials(projectId, personnelId) {
+    ensureSeed();
+    return load(KEYS.credentials, [])
+      .filter(x => x.project_id === projectId && x.personnel_id === personnelId)
+      .sort((a,b)=>a.expiry_date.localeCompare(b.expiry_date));
+  }
+  function addCredential(c) {
+    const all = load(KEYS.credentials, []);
+    const row = { ...c, id: uuid() };
+    save(KEYS.credentials, [row, ...all]); return row;
+  }
+
+  function getExpiries(projectId, days) {
+    ensureSeed();
+    const until = new Date(); until.setDate(until.getDate() + days);
+    const creds = load(KEYS.credentials, []).filter(x => x.project_id === projectId);
+    const pers = getPersonnel(projectId);
+    const pMap = new Map(pers.map(p => [p.id, p]));
+    return creds
+      .filter(c => new Date(c.expiry_date) <= until)
+      .map(c => ({ ...c, full_name: (pMap.get(c.personnel_id)?.full_name)||"—", passport_no: (pMap.get(c.personnel_id)?.passport_no)||null }))
+      .sort((a,b)=>a.expiry_date.localeCompare(b.expiry_date));
+  }
+
+  // ===== Router =====
+  const app = document.getElementById("app");
+  const navigate = (hash) => { location.hash = hash; };
+  const route = () => {
+    ensureSeed();
+    const hash = location.hash || "#/dashboard";
+    const parts = hash.replace(/^#\//,"").split("/");
+    const [page, a, b, c] = parts;
+
+    if (page === "dashboard") return renderDashboard();
+    if (page === "p" && a) {
+      const projectId = a;
+      if (!b) return renderProjectHome(projectId);
+      if (b === "personnel") {
+        if (!c) return renderPersonnelList(projectId);
+        return renderPersonnelDetail(projectId, c);
+      }
+      if (b === "expiries") return renderExpiries(projectId);
+    }
+    // fallback
+    navigate("#/dashboard");
+  };
+
+  window.addEventListener("hashchange", route);
+
+  // ===== UI helpers =====
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+  const daysLeft = (yyyy_mm_dd) => {
+    const a = new Date(); a.setHours(0,0,0,0);
+    const b = new Date(yyyy_mm_dd); b.setHours(0,0,0,0);
+    return Math.round((b - a) / (24*3600*1000));
+  };
+
+  // ===== Pages =====
+  function renderNav(itemsHtml) {
+    return `<div class="nav">${itemsHtml}
+      <span class="badge">Mode: Demo (no install)</span>
+      <button class="btn secondary" onclick="resetData()">Reset data</button>
+    </div>`;
+  }
+
+  function renderDashboard() {
+    const projects = getProjects();
+    app.innerHTML = `
+      ${renderNav(`<a href="#/dashboard">Dashboard</a>`)}
+      <div class="card">
+        <h2>Dự án</h2>
+        <p class="muted">Tạo dự án, vào dự án, thêm nhân sự và giấy tờ hết hạn.</p>
+
+        <table class="table" style="margin-top:10px">
+          <thead><tr><th>Code</th><th>Tên dự án</th><th></th></tr></thead>
+          <tbody>
+            ${projects.map(p => `
+              <tr>
+                <td>${esc(p.code||"—")}</td>
+                <td>${esc(p.name)}</td>
+                <td><a class="badge" href="#/p/${p.id}">Open</a></td>
+              </tr>`).join("") || `<tr><td colspan="3" class="muted">Chưa có dự án</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="card">
+        <h3>Tạo dự án mới</h3>
+        <div class="row">
+          <div style="flex:1 1 180px">
+            <div class="label">Code</div>
+            <input id="code" class="input" placeholder="RUYA1" />
+          </div>
+          <div style="flex:2 1 280px">
+            <div class="label">Tên dự án *</div>
+            <input id="name" class="input" placeholder="RUYA1 - Rotation Tracking" />
+          </div>
+        </div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn" onclick="(function(){
+            const code=document.getElementById('code').value;
+            const name=document.getElementById('name').value;
+            if(!name.trim()) return alert('Tên dự án là bắt buộc');
+            addProject({code,name});
+            navigate('#/dashboard');
+          })()">Create</button>
+        </div>
+        <p class="muted small" style="margin-top:10px">
+          Dữ liệu đang lưu trong trình duyệt (localStorage). Khi cần đa người dùng + phân quyền + nhắc Email/Zalo, mình sẽ bật bản Supabase.
+        </p>
+      </div>
+    `;
+  }
+
+  function renderProjectHome(projectId) {
+    app.innerHTML = `
+      ${renderNav(`<a href="#/dashboard">← Dashboard</a> <span class="badge">Project: ${esc(projectId)}</span>`)}
+      <div class="grid">
+        <div class="card">
+          <h3>Nhân sự</h3>
+          <p class="muted">Danh sách nhân sự theo dự án.</p>
+          <button class="btn" onclick="navigate('#/p/${projectId}/personnel')">Open</button>
+        </div>
+        <div class="card">
+          <h3>Expiry Dashboard</h3>
+          <p class="muted">Visa/QE Pass/Cert sắp hết hạn.</p>
+          <button class="btn" onclick="navigate('#/p/${projectId}/expiries')">Open</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPersonnelList(projectId) {
+    const rows = getPersonnel(projectId);
+    app.innerHTML = `
+      ${renderNav(`<a href="#/p/${projectId}">← Project</a> <span class="badge">Personnel</span>`)}
+      <div class="card">
+        <h2>Nhân sự</h2>
+        <div class="row" style="margin-top:8px">
+          <input id="q" class="input" style="flex:1 1 260px" placeholder="Search name/passport/position..." oninput="(function(){
+            const q=document.getElementById('q').value.toLowerCase().trim();
+            const items=${JSON.stringify(rows)};
+            const filtered = !q ? items : items.filter(r =>
+              (r.full_name||'').toLowerCase().includes(q) ||
+              (r.passport_no||'').toLowerCase().includes(q) ||
+              (r.position||'').toLowerCase().includes(q)
+            );
+            const tbody=document.getElementById('tbody');
+            tbody.innerHTML = filtered.map(r => ` + "`" + `
+              <tr>
+                <td><a class="badge" href="#/p/${projectId}/personnel/${'${r.id}'}">${'${esc(r.full_name)}'}</a></td>
+                <td>${'${esc(r.passport_no||"—")}'}</td>
+                <td>${'${esc(r.position||"—")}'}</td>
+                <td>${'${esc(r.status||"—")}'}</td>
+              </tr>` + "`" + `).join('') || '<tr><td colspan="4" class="muted">No data</td></tr>';
+          })()" />
+        </div>
+
+        <table class="table" style="margin-top:10px">
+          <thead><tr><th>Họ tên</th><th>Passport</th><th>Chức danh</th><th>Status</th></tr></thead>
+          <tbody id="tbody">
+            ${rows.map(r => `
+              <tr>
+                <td><a class="badge" href="#/p/${projectId}/personnel/${r.id}">${esc(r.full_name)}</a></td>
+                <td>${esc(r.passport_no||"—")}</td>
+                <td>${esc(r.position||"—")}</td>
+                <td>${esc(r.status||"—")}</td>
+              </tr>`).join("") || `<tr><td colspan="4" class="muted">No data</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="card">
+        <h3>Thêm nhân sự</h3>
+        <div class="row">
+          <div style="flex:1 1 260px">
+            <div class="label">Họ tên *</div>
+            <input id="full_name" class="input" />
+          </div>
+          <div style="flex:1 1 220px">
+            <div class="label">Passport</div>
+            <input id="passport_no" class="input" />
+          </div>
+          <div style="flex:1 1 220px">
+            <div class="label">Chức danh</div>
+            <input id="position" class="input" />
+          </div>
+        </div>
+        <div style="margin-top:12px">
+          <button class="btn" onclick="(function(){
+            const full_name=document.getElementById('full_name').value;
+            if(!full_name.trim()) return alert('Họ tên là bắt buộc');
+            const passport_no=document.getElementById('passport_no').value || null;
+            const position=document.getElementById('position').value || null;
+            addPersonnel({project_id:'${projectId}', full_name: full_name.trim(), passport_no, position, status:'active'});
+            navigate('#/p/${projectId}/personnel');
+          })()">Add</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderPersonnelDetail(projectId, personnelId) {
+    const p = getPersonnelById(projectId, personnelId);
+    const creds = getCredentials(projectId, personnelId);
+    app.innerHTML = `
+      ${renderNav(`<a href="#/p/${projectId}/personnel">← Personnel</a> <span class="badge">Detail</span>`)}
+      <div class="card">
+        <h2>${esc(p?.full_name || "—")}</h2>
+        <div class="row" style="margin-top:6px">
+          <span class="badge">Passport: ${esc(p?.passport_no || "—")}</span>
+          <span class="badge">Position: ${esc(p?.position || "—")}</span>
+          <span class="badge">Status: ${esc(p?.status || "—")}</span>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="card">
+        <h3>Giấy tờ / Expiry</h3>
+        <table class="table" style="margin-top:10px">
+          <thead><tr><th>Loại</th><th>Issue</th><th>Expiry</th><th>Ghi chú</th></tr></thead>
+          <tbody>
+            ${creds.map(c => `
+              <tr>
+                <td>${esc(c.kind)}</td>
+                <td>${esc(c.issue_date || "—")}</td>
+                <td>${esc(c.expiry_date)}</td>
+                <td>${esc(c.notes || "—")}</td>
+              </tr>`).join("") || `<tr><td colspan="4" class="muted">No credentials</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+
+      <div class="spacer"></div>
+
+      <div class="card">
+        <h3>Thêm giấy tờ</h3>
+        <div class="row">
+          <div style="flex:1 1 220px">
+            <div class="label">Loại *</div>
+            <select id="kind" class="input">
+              <option value="visa">visa</option>
+              <option value="qe_pass">qe_pass</option>
+              <option value="medical">medical</option>
+              <option value="certificate">certificate</option>
+              <option value="passport">passport</option>
+            </select>
+          </div>
+          <div style="flex:1 1 220px">
+            <div class="label">Issue date</div>
+            <input id="issue_date" type="date" class="input" />
+          </div>
+          <div style="flex:1 1 220px">
+            <div class="label">Expiry date *</div>
+            <input id="expiry_date" type="date" class="input" />
+          </div>
+        </div>
+        <div class="label">Notes</div>
+        <input id="notes" class="input" placeholder="e.g. QE Pass for NOC yard" />
+        <div style="margin-top:12px">
+          <button class="btn" onclick="(function(){
+            const expiry_date=document.getElementById('expiry_date').value;
+            if(!expiry_date) return alert('Expiry date là bắt buộc');
+            const kind=document.getElementById('kind').value;
+            const issue_date=document.getElementById('issue_date').value || null;
+            const notes=document.getElementById('notes').value || null;
+            addCredential({project_id:'${projectId}', personnel_id:'${personnelId}', kind, issue_date, expiry_date, notes});
+            navigate('#/p/${projectId}/personnel/${personnelId}');
+          })()">Add</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderExpiries(projectId) {
+    const defaultDays = 30;
+    const rows = getExpiries(projectId, defaultDays);
+    app.innerHTML = `
+      ${renderNav(`<a href="#/p/${projectId}">← Project</a> <span class="badge">Expiry</span>`)}
+      <div class="card">
+        <h2>Giấy tờ sắp hết hạn</h2>
+        <div class="row" style="margin-top:8px; align-items:center">
+          <span class="badge">Window (days)</span>
+          <input id="days" class="input" style="width:120px" type="number" min="1" max="365" value="${defaultDays}" />
+          <button class="btn secondary" onclick="(function(){
+            const d=Number(document.getElementById('days').value||30);
+            const rows=getExpiries('${projectId}', d);
+            const tbody=document.getElementById('tbody2');
+            tbody.innerHTML = rows.map(r => {
+              const dl = daysLeft(r.expiry_date);
+              const cls = dl<=7 ? 'badge danger' : dl<=14 ? 'badge warn' : 'badge';
+              return `<tr>
+                <td>${esc(r.full_name)}</td>
+                <td>${esc(r.passport_no||"—")}</td>
+                <td>${esc(r.kind)}</td>
+                <td>${esc(r.expiry_date)}</td>
+                <td><span class="${cls}">${dl}</span></td>
+              </tr>`;
+            }).join('') || '<tr><td colspan="5" class="muted">No expiries in window</td></tr>';
+          })()">Refresh</button>
+        </div>
+
+        <table class="table" style="margin-top:10px">
+          <thead><tr><th>Nhân sự</th><th>Passport</th><th>Loại</th><th>Expiry</th><th>D-</th></tr></thead>
+          <tbody id="tbody2">
+            ${rows.map(r => {
+              const dl = daysLeft(r.expiry_date);
+              const cls = dl<=7 ? 'badge danger' : dl<=14 ? 'badge warn' : 'badge';
+              return `<tr>
+                <td>${esc(r.full_name)}</td>
+                <td>${esc(r.passport_no||"—")}</td>
+                <td>${esc(r.kind)}</td>
+                <td>${esc(r.expiry_date)}</td>
+                <td><span class="${cls}">${dl}</span></td>
+              </tr>`;
+            }).join("") || `<tr><td colspan="5" class="muted">No expiries in window</td></tr>`}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }
+
+  // start
+  ensureSeed();
+  route();
+  </script>
+</body>
+</html>
