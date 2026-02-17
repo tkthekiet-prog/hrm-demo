@@ -3,378 +3,759 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>HRM - Master Import</title>
+  <title>HRM Personnel Tracker</title>
   <style>
     :root { color-scheme: light; }
     body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 0; background: #fafafa; color: #111; }
     a { color: inherit; text-decoration: none; }
     .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
     .card { background: white; border: 1px solid #e5e7eb; border-radius: 14px; padding: 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
-    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: end; }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; }
     .btn { border: 1px solid #111; background: #111; color: white; padding: 10px 12px; border-radius: 10px; cursor: pointer; }
     .btn.secondary { background: white; color: #111; border-color: #e5e7eb; }
-    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn.danger { background: #b91c1c; border-color:#b91c1c; }
     .input, select { border: 1px solid #e5e7eb; padding: 10px 12px; border-radius: 10px; width: 100%; }
     .label { font-size: 12px; color: #374151; margin: 8px 0 6px; }
-    .table-wrap { overflow:auto; border: 1px solid #eee; border-radius: 12px; }
-    .table { width: 100%; border-collapse: collapse; min-width: 880px; }
-    .table th, .table td { text-align: left; border-bottom: 1px solid #eee; padding: 10px 8px; font-size: 14px; white-space: nowrap; }
+    .table { width: 100%; border-collapse: collapse; }
+    .table th, .table td { text-align: left; border-bottom: 1px solid #eee; padding: 10px 8px; font-size: 13px; white-space: nowrap; }
     .badge { display: inline-block; padding: 2px 8px; border: 1px solid #e5e7eb; border-radius: 999px; font-size: 12px; }
     .warn { border-color: #f59e0b; }
     .danger { border-color: #ef4444; }
-    .muted { color: #6b7280; }
-    .nav { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+    .nav { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
     .nav a, .nav button { padding: 8px 10px; border-radius: 10px; border: 1px solid #e5e7eb; background: white; }
     .nav button { cursor: pointer; }
-    h1,h2,h3 { margin: 0 0 8px 0; }
+    h2,h3 { margin: 0 0 8px 0; }
     p { margin: 6px 0; }
+    .muted { color: #6b7280; }
+    .spacer { height: 14px; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; }
     .small { font-size: 12px; }
-    .pill { padding: 8px 10px; border-radius: 999px; border: 1px solid #e5e7eb; background: white; }
     code { background:#f3f4f6; padding:2px 6px; border-radius:6px; }
+    .table-wrap { overflow:auto; border: 1px solid #eee; border-radius: 12px; }
+    .hint { font-size: 12px; color:#374151; }
   </style>
-  <!-- SheetJS for parsing XLSX (CDN) -->
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 </head>
 <body>
   <div class="container" id="app"></div>
+
+  <!-- SheetJS (xlsx) for Excel import -->
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
   <script>
   (function(){
     const app = document.getElementById("app");
 
-    const STORE_KEY = "hrm_master_import_v4";
-
+    // ===== Utilities =====
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+    const KEYS = {
+      projects: "hrm_demo_projects_v1",
+      personnel: "hrm_demo_personnel_v2",   // bumped to v2 for new schema
+      credentials: "hrm_demo_credentials_v1",
+      schema: "hrm_demo_schema_v1",         // per-project: { columns:[], sheetName:"", headerRow: n }
+    };
 
-    function loadStore(){
-      try { const raw = localStorage.getItem(STORE_KEY); return raw ? JSON.parse(raw) : { rows: [], importedAt: null }; }
-      catch { return { rows: [], importedAt: null }; }
+    const uuid = () => {
+      try { if (crypto && crypto.randomUUID) return crypto.randomUUID(); } catch {}
+      return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+        const r = (Math.random()*16)|0, v = c==="x"?r:(r&0x3)|0x8; return v.toString(16);
+      });
+    };
+
+    const load = (key, fallback) => {
+      try { const raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : fallback; }
+      catch { return fallback; }
+    };
+    const save = (key, value) => localStorage.setItem(key, JSON.stringify(value));
+
+    function ymd(date){
+      const y = date.getFullYear();
+      const m = String(date.getMonth()+1).padStart(2,"0");
+      const d = String(date.getDate()).padStart(2,"0");
+      return `${y}-${m}-${d}`;
     }
-    function saveStore(store){ localStorage.setItem(STORE_KEY, JSON.stringify(store)); }
+    function addDays(n){
+      const d = new Date();
+      d.setDate(d.getDate() + n);
+      return ymd(d);
+    }
+    function daysLeft(yyyy_mm_dd){
+      const a = new Date(); a.setHours(0,0,0,0);
+      const b = new Date(yyyy_mm_dd); b.setHours(0,0,0,0);
+      return Math.round((b - a) / (24*3600*1000));
+    }
+
+    // Normalize header to a stable key for "extra" fields
+    function normHeader(h){
+      return String(h||"").replace(/\s+/g," ").trim();
+    }
+
+    // ===== Demo seed =====
+    function ensureSeed(){
+      const projects = load(KEYS.projects, []);
+      if (projects.length) return;
+
+      const p1 = { id: uuid(), code: "RUYA1", name: "RUYA1 - Demo Project" };
+      const p2 = { id: uuid(), code: "LDV",  name: "LDV - Demo Project" };
+
+      const personnel = [
+        { id: uuid(), project_id: p1.id, full_name: "Tran Van Hieu", passport_no: "B1234567", position: "Rigger", status: "active", extra:{} },
+        { id: uuid(), project_id: p1.id, full_name: "Thai Binh Minh", passport_no: "C7654321", position: "Supervisor", status: "active", extra:{} },
+        { id: uuid(), project_id: p2.id, full_name: "Nguyen Van Phuc", passport_no: "A9988776", position: "Technician", status: "active", extra:{} },
+      ];
+
+      const credentials = [
+        { id: uuid(), project_id: p1.id, personnel_id: personnel[0].id, kind: "qe_pass", issue_date: addDays(0),  expiry_date: addDays(7),  notes: "Demo QE pass" },
+        { id: uuid(), project_id: p1.id, personnel_id: personnel[1].id, kind: "visa",    issue_date: addDays(0),  expiry_date: addDays(14), notes: "Demo visa" },
+        { id: uuid(), project_id: p2.id, personnel_id: personnel[2].id, kind: "medical", issue_date: addDays(0),  expiry_date: addDays(30), notes: "Demo medical" },
+      ];
+
+      save(KEYS.projects, [p1, p2]);
+      save(KEYS.personnel, personnel);
+      save(KEYS.credentials, credentials);
+      save(KEYS.schema, {});
+    }
 
     function resetData(){
-      localStorage.removeItem(STORE_KEY);
-      render();
+      localStorage.removeItem(KEYS.projects);
+      localStorage.removeItem(KEYS.personnel);
+      localStorage.removeItem(KEYS.credentials);
+      localStorage.removeItem(KEYS.schema);
+      ensureSeed();
+      navigate("#/dashboard");
     }
 
-    function excelDateToJS(v){
-      // Accept Date, Excel serial number, or parseable string
-      if (!v && v !== 0) return null;
+    // ===== Store access =====
+    function getProjects(){ ensureSeed(); return load(KEYS.projects, []); }
+    function addProject(code, name){
+      const list = getProjects();
+      const p = { id: uuid(), code: (code||"").trim() || null, name: (name||"").trim() };
+      save(KEYS.projects, [p, ...list]);
+      return p;
+    }
 
-      if (v instanceof Date && !isNaN(v)) return v;
+    function getAllPersonnel(){ ensureSeed(); return load(KEYS.personnel, []); }
+    function setAllPersonnel(list){ save(KEYS.personnel, list); }
 
-      if (typeof v === "number" && isFinite(v)) {
-        // Excel serial date (1900 system)
-        const utc = Math.round((v - 25569) * 86400 * 1000);
-        const d = new Date(utc);
-        return isNaN(d) ? null : d;
+    function getPersonnel(projectId){
+      return getAllPersonnel().filter(x => x.project_id === projectId)
+        .sort((a,b)=>(a.full_name||"").localeCompare(b.full_name||""));
+    }
+
+    function addPersonnel(projectId, full_name, passport_no, position){
+      const all = getAllPersonnel();
+      const row = { id: uuid(), project_id: projectId, full_name: full_name.trim(), passport_no: passport_no || null, position: position || null, status:"active", extra:{} };
+      setAllPersonnel([row, ...all]);
+      return row;
+    }
+
+    function getPersonnelById(projectId, personnelId){
+      return getPersonnel(projectId).find(x => x.id === personnelId) || null;
+    }
+
+    function getSchemaMap(){ ensureSeed(); return load(KEYS.schema, {}); }
+    function setSchemaForProject(projectId, schema){
+      const map = getSchemaMap();
+      map[projectId] = schema;
+      save(KEYS.schema, map);
+    }
+    function getSchemaForProject(projectId){
+      const map = getSchemaMap();
+      return map[projectId] || null;
+    }
+
+    function getCredentials(projectId, personnelId){
+      ensureSeed();
+      return load(KEYS.credentials, [])
+        .filter(x => x.project_id === projectId && x.personnel_id === personnelId)
+        .sort((a,b)=>a.expiry_date.localeCompare(b.expiry_date));
+    }
+    function addCredential(projectId, personnelId, kind, issue_date, expiry_date, notes){
+      const all = load(KEYS.credentials, []);
+      const row = { id: uuid(), project_id: projectId, personnel_id: personnelId, kind, issue_date: issue_date || null, expiry_date, notes: notes || null };
+      save(KEYS.credentials, [row, ...all]);
+      return row;
+    }
+
+    function getExpiries(projectId, days){
+      ensureSeed();
+      const until = new Date(); until.setDate(until.getDate() + days);
+      const creds = load(KEYS.credentials, []).filter(x => x.project_id === projectId);
+      const pers = getPersonnel(projectId);
+      const pMap = new Map(pers.map(p => [p.id, p]));
+      return creds
+        .filter(c => new Date(c.expiry_date) <= until)
+        .map(c => ({ ...c, full_name: (pMap.get(c.personnel_id)?.full_name)||"—", passport_no: (pMap.get(c.personnel_id)?.passport_no)||null }))
+        .sort((a,b)=>a.expiry_date.localeCompare(b.expiry_date));
+    }
+
+    // ===== Excel import =====
+    function detectHeaderRow(aoa){
+      const needles = ["FULL NAME","Full Name","NAME","Name","POS ID","Passport"];
+      for (let r=0; r<Math.min(50, aoa.length); r++){
+        const row = aoa[r] || [];
+        const textRow = row.map(x => String(x||"").trim());
+        const hit = textRow.some(v => needles.includes(v));
+        const fullNameHit = textRow.some(v => v==="FULL NAME" || v==="Full Name");
+        if (fullNameHit) return r;
+        if (hit && textRow.length>5) return r;
       }
+      return 0;
+    }
 
-      if (typeof v === "string") {
-        const s = v.trim();
-        if (!s) return null;
-        const d = new Date(s);
-        if (!isNaN(d)) return d;
-
-        // Try dd/mm/yyyy
-        const m = s.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
-        if (m){
-          const dd = Number(m[1]), mm = Number(m[2]) - 1, yy = Number(m[3].length === 2 ? ("20"+m[3]) : m[3]);
-          const d2 = new Date(yy, mm, dd);
-          return isNaN(d2) ? null : d2;
-        }
+    function pick(obj, keys){
+      for (const k of keys){
+        if (obj[k] != null && String(obj[k]).trim() !== "") return obj[k];
       }
       return null;
     }
 
-    function fmtDate(d){
-      if (!d) return "—";
-      const y = d.getFullYear();
-      const m = String(d.getMonth()+1).padStart(2,"0");
-      const da = String(d.getDate()).padStart(2,"0");
-      return `${y}-${m}-${da}`;
-    }
+    function importFromExcelToProject(projectId, file, sheetName, replaceExisting){
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try{
+            const data = new Uint8Array(e.target.result);
+            const wb = XLSX.read(data, { type: "array" });
+            const sName = sheetName || (wb.Sheets["Master File"] ? "Master File" : wb.SheetNames[0]);
+            const ws = wb.Sheets[sName];
+            if (!ws) throw new Error("Không tìm thấy sheet: " + sName);
 
-    function addMonths(date, months){
-      const d = new Date(date.getTime());
-      const day = d.getDate();
-      d.setMonth(d.getMonth() + months);
-      // handle month roll
-      if (d.getDate() < day) d.setDate(0);
-      return d;
-    }
+            const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: false, defval: "" });
+            const headerRow = detectHeaderRow(aoa);
+            const headers = (aoa[headerRow] || []).map(normHeader);
+            const columns = headers.filter(h => h); // remove empty
+            const rows = aoa.slice(headerRow+1);
 
-    function daysLeft(d){
-      if (!d) return null;
-      const a = new Date(); a.setHours(0,0,0,0);
-      const b = new Date(d.getTime()); b.setHours(0,0,0,0);
-      return Math.round((b - a) / (24*3600*1000));
-    }
+            const imported = [];
+            for (const row of rows){
+              if (!row || row.length===0) continue;
+              const obj = {};
+              for (let i=0; i<headers.length; i++){
+                const h = headers[i];
+                if (!h) continue;
+                obj[h] = row[i] === "" ? null : row[i];
+              }
 
-    function normalizeHeader(h){
-      return String(h ?? "").trim();
-    }
+              const full_name = pick(obj, ["FULL NAME","Full Name","NAME","Name"]);
+              if (!full_name) continue;
 
-    function findHeaderRow(rows){
-      // Find first row that contains FULL NAME and PASSPORT
-      for (let i = 0; i < rows.length; i++){
-        const row = rows[i].map(normalizeHeader);
-        const hasFull = row.includes("FULL NAME");
-        const hasPass = row.includes("PASSPORT");
-        const hasVal = row.includes("PASSPORT VALIDITY");
-        if (hasFull && hasPass && hasVal) return i;
-      }
-      return -1;
-    }
+              // Skip statistics rows like "Số liệu"
+              const noVal = pick(obj, ["NO","No.","No"]);
+              if (noVal && String(noVal).trim() && isNaN(parseInt(String(noVal).trim(),10)) && String(noVal).trim().toLowerCase() !== "nan"){
+                // allow if it still looks like a person row (has passport/dawinci)
+                const maybeKey = pick(obj, ["DAWINCI","POS ID","Passport","PASSPORT"]);
+                if (!maybeKey) continue;
+              }
 
-    function mapIndexes(headers){
-      const idx = {};
-      const need = [
-        "FULL NAME",
-        "Chức danh đi biển Dự án (TA) theo KHC",
-        "DAWINCI",
-        "PASSPORT",
-        "PASSPORT VALIDITY",
-        "PROJECT CODE" // optional for future
-      ];
-      for (const key of need){
-        idx[key] = headers.indexOf(key);
-      }
-      return idx;
-    }
+              const passport = pick(obj, ["PASSPORT","Passport"]);
+              const position = pick(obj, ["POSITION","Position","Chức danh đi biển Dự án (TA) theo KHC","Chức danh đi biển Dự án (TV) theo KHC"]);
 
-    async function importMasterFile(file){
-      if (!window.XLSX) throw new Error("Không tải được thư viện XLSX (CDN). Hãy thử lại hoặc đổi mạng.");
+              // Keep all columns in extra
+              const extra = {};
+              for (const col of columns){
+                extra[col] = obj[col] ?? null;
+              }
 
-      const buf = await file.arrayBuffer();
-      const wb = XLSX.read(buf, { type: "array", cellDates: true });
+              imported.push({
+                id: uuid(),
+                project_id: projectId,
+                full_name: String(full_name).trim(),
+                passport_no: passport ? String(passport).trim() : null,
+                position: position ? String(position).trim() : null,
+                status: "active",
+                extra
+              });
+            }
 
-      const sheetName = wb.SheetNames.find(n => n === "Master File") || "Master File";
-      const ws = wb.Sheets[sheetName];
-      if (!ws) throw new Error(`Không tìm thấy sheet "Master File". Sheet đang có: ${wb.SheetNames.join(", ")}`);
+            // Persist
+            const all = getAllPersonnel();
+            const remaining = replaceExisting ? all.filter(p => p.project_id !== projectId) : all;
+            setAllPersonnel([...imported, ...remaining]);
 
-      const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: "", raw: true });
-      const headerRow = findHeaderRow(rows);
-      if (headerRow < 0) throw new Error('Không tìm thấy dòng header có "FULL NAME / PASSPORT / PASSPORT VALIDITY".');
+            // Save schema
+            setSchemaForProject(projectId, {
+              sheetName: sName,
+              headerRow,
+              columns,
+              importedAt: new Date().toISOString()
+            });
 
-      const headers = rows[headerRow].map(normalizeHeader);
-      const idx = mapIndexes(headers);
-
-      // Validate required columns
-      const required = [
-        "FULL NAME",
-        "Chức danh đi biển Dự án (TA) theo KHC",
-        "DAWINCI",
-        "PASSPORT",
-        "PASSPORT VALIDITY"
-      ];
-      const missing = required.filter(k => idx[k] === -1);
-      if (missing.length){
-        throw new Error("Thiếu cột: " + missing.join(", "));
-      }
-
-      const out = [];
-      for (let r = headerRow + 1; r < rows.length; r++){
-        const row = rows[r];
-        const fullName = String(row[idx["FULL NAME"]] ?? "").trim();
-        if (!fullName) continue;
-
-        const titleTA = String(row[idx["Chức danh đi biển Dự án (TA) theo KHC"]] ?? "").trim() || null;
-        const dawinci = String(row[idx["DAWINCI"]] ?? "").trim() || null;
-        const passport = String(row[idx["PASSPORT"]] ?? "").trim() || null;
-
-        const rawValidity = row[idx["PASSPORT VALIDITY"]];
-        const validity = excelDateToJS(rawValidity);
-
-        const projectCodeIdx = idx["PROJECT CODE"];
-        const projectCode = projectCodeIdx >= 0 ? (String(row[projectCodeIdx] ?? "").trim() || null) : null;
-
-        out.push({
-          fullName,
-          titleTA,
-          dawinci,
-          passport,
-          passportValidity: validity ? validity.toISOString() : null,
-          projectCode
-        });
-      }
-
-      // Sort by passport validity (nulls last)
-      out.sort((a,b)=>{
-        const da = a.passportValidity ? Date.parse(a.passportValidity) : Infinity;
-        const db = b.passportValidity ? Date.parse(b.passportValidity) : Infinity;
-        return da - db;
+            resolve({ count: imported.length, sheetName: sName, columns });
+          } catch(err){
+            reject(err);
+          }
+        };
+        reader.onerror = () => reject(new Error("Không đọc được file."));
+        reader.readAsArrayBuffer(file);
       });
+    }
 
-      const store = { rows: out, importedAt: new Date().toISOString() };
-      saveStore(store);
-      render();
+    // ===== Router =====
+    const navigate = (hash) => { location.hash = hash; };
+    function parseRoute(){
+      const hash = location.hash || "#/dashboard";
+      const parts = hash.replace(/^#\//,"").split("/");
+      const [page, a, b, c] = parts;
+      return { page, a, b, c, hash };
+    }
+    window.addEventListener("hashchange", render);
+
+    function navHtml(extra){
+      return `
+        <div class="nav">
+          ${extra || ""}
+          <span class="badge">Mode: Demo (no install)</span>
+          <button id="btnReset">Reset data</button>
+        </div>
+      `;
     }
 
     function render(){
-      const store = loadStore();
-      const rows = store.rows || [];
-      const importedAt = store.importedAt ? new Date(store.importedAt) : null;
-
-      const today = new Date();
-      const warnUntil = addMonths(today, 6);
-
-      const stats = (() => {
-        let warn = 0, expired = 0, nodate = 0;
-        for (const r of rows){
-          if (!r.passportValidity){ nodate++; continue; }
-          const d = new Date(r.passportValidity);
-          if (isNaN(d)) { nodate++; continue; }
-          if (d < today) expired++;
-          else if (d <= warnUntil) warn++;
+      try{
+        ensureSeed();
+        const r = parseRoute();
+        if (r.page === "dashboard") return renderDashboard();
+        if (r.page === "p" && r.a){
+          const projectId = r.a;
+          if (!r.b) return renderProjectHome(projectId);
+          if (r.b === "personnel"){
+            if (!r.c) return renderPersonnelList(projectId);
+            return renderPersonnelDetail(projectId, r.c);
+          }
+          if (r.b === "expiries") return renderExpiries(projectId);
         }
-        return { total: rows.length, warn, expired, nodate };
-      })();
+        navigate("#/dashboard");
+      } catch (e){
+        app.innerHTML = `
+          <div class="card">
+            <h2>Oops, có lỗi JavaScript</h2>
+            <p class="muted">Bạn mở DevTools (F12) → Console để xem chi tiết.</p>
+            <pre style="white-space:pre-wrap">${esc(String(e && e.stack ? e.stack : e))}</pre>
+            <div class="row">
+              <button class="btn" onclick="location.reload()">Reload</button>
+              <button class="btn secondary" onclick="localStorage.clear(); location.reload()">Clear storage</button>
+            </div>
+          </div>
+        `;
+      }
+    }
 
+    function bindCommon(){
+      const btnReset = document.getElementById("btnReset");
+      if (btnReset) btnReset.addEventListener("click", resetData);
+    }
+
+    function renderDashboard(){
+      const projects = getProjects();
       app.innerHTML = `
-        <div class="nav">
-          <a href="#" class="pill"><b>HRM Master Import</b></a>
-          <span class="badge">Warning window: 6 months</span>
-          <button id="btnReset" class="btn secondary">Reset data</button>
+        ${navHtml(`<a href="#/dashboard">Dashboard</a>`)}
+        <div class="card">
+          <h2>Dự án</h2>
+          <p class="muted">Tạo dự án, vào dự án, thêm nhân sự và giấy tờ hết hạn. Có thể import Excel để add toàn bộ tên & cột.</p>
+          <table class="table" style="margin-top:10px">
+            <thead><tr><th>Code</th><th>Tên dự án</th><th></th></tr></thead>
+            <tbody>
+              ${projects.map(p => `
+                <tr>
+                  <td>${esc(p.code||"—")}</td>
+                  <td>${esc(p.name)}</td>
+                  <td><a class="badge" href="#/p/${p.id}">Open</a></td>
+                </tr>
+              `).join("") || `<tr><td colspan="3" class="muted">Chưa có dự án</td></tr>`}
+            </tbody>
+          </table>
         </div>
 
-        <div class="card">
-          <h2>Import từ Excel (sheet: <code>Master File</code>)</h2>
-          <p class="muted">Chỉ lấy các cột: <b>FULL NAME</b>, <b>Chức danh đi biển Dự án (TA) theo KHC</b>, <b>DAWINCI</b>, <b>PASSPORT</b>, <b>PASSPORT VALIDITY</b>. Nếu <b>PASSPORT VALIDITY</b> còn ≤ 6 tháng sẽ cảnh báo.</p>
+        <div class="spacer"></div>
 
-          <div class="row" style="margin-top:10px">
-            <div style="flex: 1 1 360px">
-              <div class="label">Chọn file Excel (.xlsx)</div>
-              <input id="file" class="input" type="file" accept=".xlsx,.xls" />
+        <div class="card">
+          <h3>Tạo dự án mới</h3>
+          <div class="row">
+            <div style="flex:1 1 180px">
+              <div class="label">Code</div>
+              <input id="code" class="input" placeholder="RUYA1" />
             </div>
-            <div style="flex: 0 0 auto">
-              <button id="btnImport" class="btn" disabled>Import</button>
+            <div style="flex:2 1 280px">
+              <div class="label">Tên dự án *</div>
+              <input id="name" class="input" placeholder="RUYA1 - Rotation Tracking" />
+            </div>
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button id="btnCreate" class="btn">Create</button>
+          </div>
+          <p class="muted small" style="margin-top:10px">
+            Dữ liệu lưu trong trình duyệt (localStorage). Bản multi-user + phân quyền + nhắc Email/Zalo sẽ làm ở phase sau.
+          </p>
+        </div>
+      `;
+      bindCommon();
+
+      document.getElementById("btnCreate").addEventListener("click", () => {
+        const code = document.getElementById("code").value;
+        const name = document.getElementById("name").value;
+        if (!name.trim()) return alert("Tên dự án là bắt buộc");
+        addProject(code, name);
+        renderDashboard();
+      });
+    }
+
+    function renderProjectHome(projectId){
+      app.innerHTML = `
+        ${navHtml(`<a href="#/dashboard">← Dashboard</a><span class="badge">Project: ${esc(projectId)}</span>`)}
+        <div class="grid">
+          <div class="card">
+            <h3>Nhân sự</h3>
+            <p class="muted">Danh sách nhân sự theo dự án. Có import Excel.</p>
+            <button id="goPersonnel" class="btn">Open</button>
+          </div>
+          <div class="card">
+            <h3>Expiry Dashboard</h3>
+            <p class="muted">Visa/QE Pass/Cert sắp hết hạn (từ tab Credentials hiện tại).</p>
+            <button id="goExpiry" class="btn">Open</button>
+          </div>
+        </div>
+      `;
+      bindCommon();
+      document.getElementById("goPersonnel").addEventListener("click", ()=>navigate(`#/p/${projectId}/personnel`));
+      document.getElementById("goExpiry").addEventListener("click", ()=>navigate(`#/p/${projectId}/expiries`));
+    }
+
+    function renderPersonnelList(projectId){
+      let rows = getPersonnel(projectId);
+      const schema = getSchemaForProject(projectId);
+      const columns = schema?.columns || ["FULL NAME","DAWINCI","PASSPORT","POSITION"];
+
+      app.innerHTML = `
+        ${navHtml(`<a href="#/p/${projectId}">← Project</a><span class="badge">Personnel</span>`)}
+
+        <div class="card">
+          <h2>Import Excel (Add hết tên + cột)</h2>
+          <p class="muted small">
+            Chọn file Excel của bạn → chọn sheet (mặc định <code>Master File</code>) → Import.
+            Sau import, bảng sẽ hiển thị theo đúng các cột trong file.
+          </p>
+
+          <div class="row">
+            <div style="flex:2 1 420px">
+              <div class="label">Excel file</div>
+              <input id="file" type="file" class="input" accept=".xlsx,.xls" />
+            </div>
+            <div style="flex:1 1 220px">
+              <div class="label">Sheet name</div>
+              <input id="sheet" class="input" placeholder="Master File" value="${esc(schema?.sheetName || "Master File")}" />
+            </div>
+            <div style="flex:1 1 220px">
+              <div class="label">Replace existing?</div>
+              <select id="replace" class="input">
+                <option value="yes" selected>Yes (đè dữ liệu dự án này)</option>
+                <option value="no">No (append)</option>
+              </select>
             </div>
           </div>
 
-          <div style="margin-top:12px" class="row">
-            <span class="badge">Total: ${stats.total}</span>
-            <span class="badge warn">Expiring ≤6M: ${stats.warn}</span>
-            <span class="badge danger">Expired: ${stats.expired}</span>
-            <span class="badge">No date: ${stats.nodate}</span>
-            <span class="muted small">${importedAt ? ("Imported at: " + importedAt.toLocaleString()) : "Chưa import file"}</span>
+          <div class="row" style="margin-top:12px">
+            <button id="btnImport" class="btn">Import</button>
+            <span id="importStatus" class="badge" style="display:none"></span>
+          </div>
+
+          <p class="hint" style="margin-top:10px">
+            Nếu file có nhiều sheet, bạn có thể nhập đúng tên sheet ở ô <b>Sheet name</b>.
+          </p>
+        </div>
+
+        <div class="spacer"></div>
+
+        <div class="card">
+          <h2>Nhân sự</h2>
+          <div class="row" style="margin-top:8px">
+            <input id="q" class="input" style="flex:1 1 260px" placeholder="Search (tìm theo bất kỳ cột nào)..." />
+            <span class="badge">Rows: ${rows.length}</span>
+          </div>
+
+          <div class="table-wrap" style="margin-top:10px">
+            <table class="table">
+              <thead>
+                <tr>
+                  ${columns.map(c => `<th>${esc(c)}</th>`).join("")}
+                </tr>
+              </thead>
+              <tbody id="tbody"></tbody>
+            </table>
           </div>
         </div>
 
         <div class="spacer"></div>
 
         <div class="card">
-          <div class="row" style="align-items:center; justify-content:space-between">
-            <div>
-              <h2>Danh sách nhân sự</h2>
-              <p class="muted small">Tip: dùng ô search để tìm theo tên / passport / chức danh / dawinci.</p>
+          <h3>Thêm nhân sự thủ công</h3>
+          <div class="row">
+            <div style="flex:1 1 260px">
+              <div class="label">Họ tên *</div>
+              <input id="full_name" class="input" />
             </div>
-            <div style="min-width:320px; flex: 1 1 320px">
-              <div class="label">Search</div>
-              <input id="q" class="input" placeholder="Nhập từ khoá..." />
+            <div style="flex:1 1 220px">
+              <div class="label">Passport</div>
+              <input id="passport_no" class="input" />
+            </div>
+            <div style="flex:1 1 220px">
+              <div class="label">Chức danh</div>
+              <input id="position" class="input" />
             </div>
           </div>
-
-          <div class="spacer"></div>
-
-          <div class="table-wrap">
-            <table class="table">
-              <thead>
-                <tr>
-                  <th>FULL NAME</th>
-                  <th>Chức danh (TA) theo KHC</th>
-                  <th>DAWINCI</th>
-                  <th>PASSPORT</th>
-                  <th>PASSPORT VALIDITY</th>
-                  <th>Cảnh báo</th>
-                </tr>
-              </thead>
-              <tbody id="tbody">
-                ${rows.length ? "" : `<tr><td colspan="6" class="muted">Chưa có dữ liệu. Hãy import file Excel.</td></tr>`}
-              </tbody>
-            </table>
+          <div style="margin-top:12px">
+            <button id="btnAdd" class="btn secondary">Add</button>
           </div>
         </div>
       `;
-
-      document.getElementById("btnReset").addEventListener("click", resetData);
-
-      const fileEl = document.getElementById("file");
-      const btnImport = document.getElementById("btnImport");
-      fileEl.addEventListener("change", () => {
-        btnImport.disabled = !(fileEl.files && fileEl.files.length);
-      });
-      btnImport.addEventListener("click", async () => {
-        const f = fileEl.files && fileEl.files[0];
-        if (!f) return;
-        btnImport.disabled = true;
-        btnImport.textContent = "Importing...";
-        try {
-          await importMasterFile(f);
-        } catch (e) {
-          alert(String(e && e.message ? e.message : e));
-          render();
-        } finally {
-          btnImport.textContent = "Import";
-          btnImport.disabled = false;
-        }
-      });
+      bindCommon();
 
       const tbody = document.getElementById("tbody");
 
-      function buildRow(r){
-        const validity = r.passportValidity ? new Date(r.passportValidity) : null;
-        const dl = validity ? daysLeft(validity) : null;
+      const getCell = (person, col) => {
+        const c = normHeader(col);
+        // common aliases for convenience
+        if (c === "FULL NAME" || c === "Full Name" || c === "NAME" || c === "Name") return person.full_name || "";
+        if (c === "PASSPORT" || c === "Passport") return person.passport_no || "";
+        if (c === "POSITION" || c === "Position") return person.position || "";
+        return (person.extra && person.extra[c] != null) ? person.extra[c] : "";
+      };
 
-        let badge = `<span class="badge">—</span>`;
-        if (!validity) badge = `<span class="badge">No date</span>`;
-        else if (validity < today) badge = `<span class="badge danger">Expired</span>`;
-        else if (validity <= warnUntil) badge = `<span class="badge warn">Expiring ≤6M</span>`;
+      const renderTable = (list) => {
+        tbody.innerHTML = list.map(p => {
+          return `<tr>` + columns.map(col => {
+            const v = getCell(p, col);
+            // Make FULL NAME clickable to detail
+            const n = normHeader(col);
+            if (n === "FULL NAME" || n === "Full Name" || n === "NAME" || n === "Name"){
+              return `<td><a class="badge" href="#/p/${projectId}/personnel/${p.id}">${esc(v || "—")}</a></td>`;
+            }
+            return `<td>${esc(v ?? "")}</td>`;
+          }).join("") + `</tr>`;
+        }).join("") || `<tr><td colspan="${columns.length}" class="muted">No data</td></tr>`;
+      };
 
-        const daysTxt = (dl === null) ? "" : ` <span class="muted small">(D-${dl})</span>`;
-
-        return `
-          <tr>
-            <td>${esc(r.fullName)}</td>
-            <td>${esc(r.titleTA || "—")}</td>
-            <td>${esc(r.dawinci || "—")}</td>
-            <td>${esc(r.passport || "—")}</td>
-            <td>${esc(fmtDate(validity))}${daysTxt}</td>
-            <td>${badge}</td>
-          </tr>
-        `;
-      }
-
-      function renderTable(list){
-        if (!list.length){
-          tbody.innerHTML = `<tr><td colspan="6" class="muted">No results</td></tr>`;
-          return;
-        }
-        tbody.innerHTML = list.map(buildRow).join("");
-      }
-
-      // initial table render
       renderTable(rows);
 
-      // search
-      const q = document.getElementById("q");
-      q.addEventListener("input", () => {
-        const keyword = (q.value || "").toLowerCase().trim();
-        if (!keyword) return renderTable(rows);
-
-        const filtered = rows.filter(r => {
-          return (
-            (r.fullName || "").toLowerCase().includes(keyword) ||
-            (r.titleTA || "").toLowerCase().includes(keyword) ||
-            (r.dawinci || "").toLowerCase().includes(keyword) ||
-            (r.passport || "").toLowerCase().includes(keyword)
-          );
+      // Search across ALL columns in schema
+      document.getElementById("q").addEventListener("input", (e) => {
+        const q = (e.target.value || "").toLowerCase().trim();
+        if (!q) return renderTable(rows);
+        const filtered = rows.filter(p => {
+          // check base + extras
+          const hay = [
+            p.full_name, p.passport_no, p.position,
+            ...(columns.map(c => getCell(p,c)))
+          ].join(" ").toLowerCase();
+          return hay.includes(q);
         });
         renderTable(filtered);
+      });
+
+      // Manual add
+      document.getElementById("btnAdd").addEventListener("click", () => {
+        const full_name = document.getElementById("full_name").value;
+        if (!full_name.trim()) return alert("Họ tên là bắt buộc");
+        const passport_no = document.getElementById("passport_no").value.trim();
+        const position = document.getElementById("position").value.trim();
+        addPersonnel(projectId, full_name, passport_no || null, position || null);
+        rows = getPersonnel(projectId);
+        document.getElementById("full_name").value = "";
+        document.getElementById("passport_no").value = "";
+        document.getElementById("position").value = "";
+        renderTable(rows);
+      });
+
+      // Import
+      document.getElementById("btnImport").addEventListener("click", async () => {
+        const fileInput = document.getElementById("file");
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return alert("Bạn chưa chọn file Excel.");
+        const sheetName = document.getElementById("sheet").value.trim() || "Master File";
+        const replaceExisting = (document.getElementById("replace").value === "yes");
+        const status = document.getElementById("importStatus");
+
+        status.style.display = "inline-block";
+        status.textContent = "Importing...";
+        status.className = "badge";
+
+        try{
+          const res = await importFromExcelToProject(projectId, file, sheetName, replaceExisting);
+          rows = getPersonnel(projectId);
+          status.textContent = `Imported: ${res.count} rows | Sheet: ${res.sheetName} | Cols: ${res.columns.length}`;
+          status.className = "badge warn";
+          // re-render page to reflect new columns
+          renderPersonnelList(projectId);
+        } catch (err){
+          status.textContent = "Import failed: " + (err && err.message ? err.message : String(err));
+          status.className = "badge danger";
+        }
+      });
+    }
+
+    function renderPersonnelDetail(projectId, personnelId){
+      const p = getPersonnelById(projectId, personnelId);
+      const creds = getCredentials(projectId, personnelId);
+      const schema = getSchemaForProject(projectId);
+      const columns = schema?.columns || [];
+
+      // show key info + a mini table of all columns for this person
+      app.innerHTML = `
+        ${navHtml(`<a href="#/p/${projectId}/personnel">← Personnel</a><span class="badge">Detail</span>`)}
+
+        <div class="card">
+          <h2>${esc(p?.full_name || "—")}</h2>
+          <div class="row" style="margin-top:6px">
+            <span class="badge">Passport: ${esc(p?.passport_no || "—")}</span>
+            <span class="badge">Position: ${esc(p?.position || "—")}</span>
+            <span class="badge">Status: ${esc(p?.status || "—")}</span>
+          </div>
+        </div>
+
+        <div class="spacer"></div>
+
+        <div class="card">
+          <h3>Thông tin theo file (các cột)</h3>
+          ${columns.length ? `
+            <div class="table-wrap" style="margin-top:10px">
+              <table class="table">
+                <thead><tr><th>Column</th><th>Value</th></tr></thead>
+                <tbody>
+                  ${columns.map(c => {
+                    const k = normHeader(c);
+                    const v = (k==="FULL NAME"||k==="Full Name"||k==="NAME"||k==="Name") ? (p?.full_name||"") :
+                              (k==="PASSPORT"||k==="Passport") ? (p?.passport_no||"") :
+                              (k==="POSITION"||k==="Position") ? (p?.position||"") :
+                              (p?.extra?.[k] ?? "");
+                    return `<tr><td>${esc(c)}</td><td>${esc(v ?? "")}</td></tr>`;
+                  }).join("")}
+                </tbody>
+              </table>
+            </div>
+          ` : `<p class="muted">Chưa import Excel cho dự án này.</p>`}
+        </div>
+
+        <div class="spacer"></div>
+
+        <div class="card">
+          <h3>Giấy tờ / Expiry (manual)</h3>
+          <table class="table" style="margin-top:10px">
+            <thead><tr><th>Loại</th><th>Issue</th><th>Expiry</th><th>Ghi chú</th></tr></thead>
+            <tbody>
+              ${creds.map(c => `
+                <tr>
+                  <td>${esc(c.kind)}</td>
+                  <td>${esc(c.issue_date || "—")}</td>
+                  <td>${esc(c.expiry_date)}</td>
+                  <td>${esc(c.notes || "—")}</td>
+                </tr>
+              `).join("") || `<tr><td colspan="4" class="muted">No credentials</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="spacer"></div>
+
+        <div class="card">
+          <h3>Thêm giấy tờ</h3>
+          <div class="row">
+            <div style="flex:1 1 220px">
+              <div class="label">Loại *</div>
+              <select id="kind" class="input">
+                <option value="visa">visa</option>
+                <option value="qe_pass">qe_pass</option>
+                <option value="medical">medical</option>
+                <option value="certificate">certificate</option>
+                <option value="passport">passport</option>
+              </select>
+            </div>
+            <div style="flex:1 1 220px">
+              <div class="label">Issue date</div>
+              <input id="issue_date" type="date" class="input" />
+            </div>
+            <div style="flex:1 1 220px">
+              <div class="label">Expiry date *</div>
+              <input id="expiry_date" type="date" class="input" />
+            </div>
+          </div>
+          <div class="label">Notes</div>
+          <input id="notes" class="input" placeholder="e.g. QE Pass for NOC yard" />
+          <div style="margin-top:12px">
+            <button id="btnAddCred" class="btn">Add</button>
+          </div>
+        </div>
+      `;
+      bindCommon();
+
+      document.getElementById("btnAddCred").addEventListener("click", () => {
+        const kind = document.getElementById("kind").value;
+        const issue_date = document.getElementById("issue_date").value;
+        const expiry_date = document.getElementById("expiry_date").value;
+        const notes = document.getElementById("notes").value;
+        if (!expiry_date) return alert("Expiry date là bắt buộc");
+        addCredential(projectId, personnelId, kind, issue_date || null, expiry_date, notes || null);
+        navigate(`#/p/${projectId}/personnel/${personnelId}`);
+      });
+    }
+
+    function renderExpiries(projectId){
+      const defaultDays = 30;
+      const rows = getExpiries(projectId, defaultDays);
+
+      app.innerHTML = `
+        ${navHtml(`<a href="#/p/${projectId}">← Project</a><span class="badge">Expiry</span>`)}
+
+        <div class="card">
+          <h2>Giấy tờ sắp hết hạn</h2>
+          <div class="row" style="margin-top:8px; align-items:center">
+            <span class="badge">Window (days)</span>
+            <input id="days" class="input" style="width:120px" type="number" min="1" max="365" value="${defaultDays}" />
+            <button id="btnRefresh" class="btn secondary">Refresh</button>
+          </div>
+
+          <table class="table" style="margin-top:10px">
+            <thead><tr><th>Nhân sự</th><th>Passport</th><th>Loại</th><th>Expiry</th><th>D-</th></tr></thead>
+            <tbody id="tbody2">
+              ${rows.map(r => {
+                const dl = daysLeft(r.expiry_date);
+                const cls = dl<=7 ? "badge danger" : dl<=14 ? "badge warn" : "badge";
+                return `
+                  <tr>
+                    <td>${esc(r.full_name)}</td>
+                    <td>${esc(r.passport_no||"—")}</td>
+                    <td>${esc(r.kind)}</td>
+                    <td>${esc(r.expiry_date)}</td>
+                    <td><span class="${cls}">${dl}</span></td>
+                  </tr>
+                `;
+              }).join("") || `<tr><td colspan="5" class="muted">No expiries in window</td></tr>`}
+            </tbody>
+          </table>
+        </div>
+      `;
+      bindCommon();
+
+      document.getElementById("btnRefresh").addEventListener("click", () => {
+        const d = Number(document.getElementById("days").value || defaultDays);
+        const tbody = document.getElementById("tbody2");
+        const rows = getExpiries(projectId, d);
+        tbody.innerHTML = rows.map(r => {
+          const dl = daysLeft(r.expiry_date);
+          const cls = dl<=7 ? "badge danger" : dl<=14 ? "badge warn" : "badge";
+          return `
+            <tr>
+              <td>${esc(r.full_name)}</td>
+              <td>${esc(r.passport_no||"—")}</td>
+              <td>${esc(r.kind)}</td>
+              <td>${esc(r.expiry_date)}</td>
+              <td><span class="${cls}">${dl}</span></td>
+            </tr>
+          `;
+        }).join("") || `<tr><td colspan="5" class="muted">No expiries in window</td></tr>`;
       });
     }
 
     // start
+    ensureSeed();
     render();
   })();
   </script>
